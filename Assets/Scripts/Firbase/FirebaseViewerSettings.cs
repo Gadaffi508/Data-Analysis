@@ -11,6 +11,7 @@ public class FirebaseViewerSettings : ScriptableObject
     public string viewerEmail;
 
     [Tooltip("Viewer account password (read-only user)")]
+    [HideInInspector]
     public string viewerPassword;
 
     [Header("Realtime Database")]

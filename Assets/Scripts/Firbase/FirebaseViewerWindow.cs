@@ -1,6 +1,8 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
@@ -15,10 +17,13 @@ public class FirebaseViewerWindow : EditorWindow
     private string searchKeyword;
     private Vector2 scroll;
 
+    private string[] commonPaths = { "players", "zones", "leaderboard", "stats" };
+
     [MenuItem("Tools/Firebase Player Data Viewer")]
     public static void ShowWindow()
     {
         var window = GetWindow<FirebaseViewerWindow>("Firebase Viewer");
+        window.titleContent = new GUIContent("Firebase Dashboard");
         window.minSize = new Vector2(600, 400);
         window.Show();
     }
@@ -105,7 +110,6 @@ public class FirebaseViewerWindow : EditorWindow
     private void DrawFetchUI()
     {
         EditorGUILayout.LabelField("Fetch", EditorStyles.boldLabel);
-
         if (settings == null) return;
 
         if (string.IsNullOrEmpty(fetchPath))
@@ -113,13 +117,27 @@ public class FirebaseViewerWindow : EditorWindow
 
         EditorGUILayout.BeginHorizontal();
         fetchPath = EditorGUILayout.TextField("Path", fetchPath);
-        GUI.enabled = !string.IsNullOrEmpty(idToken) && !string.IsNullOrEmpty(settings.databaseUrl);
         if (GUILayout.Button("Fetch Now", GUILayout.Width(120)))
-        {
             _ = FetchAsync();
-        }
-        GUI.enabled = true;
         EditorGUILayout.EndHorizontal();
+
+        if (!string.IsNullOrEmpty(fetchPath))
+        {
+            var filtered = commonPaths.Where(p => p.StartsWith(fetchPath, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (filtered.Length > 0 && filtered[0] != fetchPath)
+            {
+                GUILayout.BeginVertical(EditorStyles.helpBox);
+                foreach (var p in filtered)
+                {
+                    if (GUILayout.Button(p, EditorStyles.miniButton))
+                    {
+                        fetchPath = p;
+                        GUI.FocusControl(null);
+                    }
+                }
+                GUILayout.EndVertical();
+            }
+        }
     }
 
     private async Task FetchAsync()
@@ -161,11 +179,55 @@ public class FirebaseViewerWindow : EditorWindow
             ? JsonPrettyUtil.Pretty(jsonRaw)
             : JsonPrettyUtil.FilterContains(jsonRaw, searchKeyword);
 
-        scroll = EditorGUILayout.BeginScrollView(scroll);
-        EditorGUILayout.TextArea(display, GUILayout.ExpandHeight(true));
-        EditorGUILayout.EndScrollView();
+        DrawZoneAnalytics(jsonRaw);
     }
 
+    private void DrawZoneAnalytics(string json)
+    {
+        // Parse: {"zone1":{"visits":4},"zone2":{"visits":1}}
+        var data = new Dictionary<string, int>();
+        try
+        {
+            var jsonObj = MiniJSON.Json.Deserialize(json) as Dictionary<string, object>;
+            foreach (var kv in jsonObj)
+            {
+                if (kv.Value is Dictionary<string, object> sub)
+                {
+                    if (sub.ContainsKey("visits"))
+                        data[kv.Key] = Convert.ToInt32(sub["visits"]);
+                }
+            }
+        }
+        catch
+        {
+            EditorGUILayout.HelpBox("Invalid JSON format.", MessageType.Error);
+            return;
+        }
+
+        if (data.Count == 0)
+        {
+            EditorGUILayout.HelpBox("No zone data found.", MessageType.Info);
+            return;
+        }
+
+        int total = 0;
+        foreach (var v in data.Values) total += v;
+        if (total == 0) total = 1;
+
+        GUILayout.Space(10);
+        EditorGUILayout.LabelField("Zone Analytics", EditorStyles.boldLabel);
+
+        foreach (var kv in data)
+        {
+            float ratio = (float)kv.Value / total;
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"{kv.Key} ({kv.Value} visits)", GUILayout.Width(150));
+            Rect r = GUILayoutUtility.GetRect(1, 20, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(new Rect(r.x, r.y + 5, r.width * ratio, 10), Color.Lerp(Color.red, Color.green, ratio));
+            EditorGUILayout.LabelField($"{(ratio * 100f):0.0}%", GUILayout.Width(50));
+            EditorGUILayout.EndHorizontal();
+        }
+    }
     private void SaveJsonToFile()
     {
         var path = EditorUtility.SaveFilePanel("Save JSON", Application.dataPath, $"firebase_{(string.IsNullOrEmpty(fetchPath) ? "root" : fetchPath.Replace('/', '_'))}.json", "json");
