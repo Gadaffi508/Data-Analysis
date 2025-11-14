@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.Text;
+using UnityEditor;
 using UnityEngine;
 
 public static class JsonPrettyUtil
@@ -35,4 +37,32 @@ public static class JsonPrettyUtil
         var r = sb.ToString();
         return string.IsNullOrEmpty(r) ? "// no matches" : r;
     }
+
+    public static void DrawJsonTree(Dictionary<string, object> node, int indent = 0)
+    {
+        foreach (var kv in node)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Space(indent * 16);
+
+            if (kv.Value is Dictionary<string, object> child)
+            {
+                bool expanded = EditorPrefs.GetBool("fold_" + kv.Key, false);
+                bool newState = EditorGUILayout.Foldout(expanded, kv.Key, true);
+
+                if (newState != expanded)
+                    EditorPrefs.SetBool("fold_" + kv.Key, newState);
+
+                if (newState)
+                    DrawJsonTree(child, indent + 1);
+            }
+            else
+            {
+                EditorGUILayout.LabelField($"{kv.Key}: {kv.Value}");
+            }
+
+            GUILayout.EndHorizontal();
+        }
+    }
+
 }

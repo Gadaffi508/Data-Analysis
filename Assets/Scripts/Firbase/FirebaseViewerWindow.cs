@@ -9,6 +9,10 @@ using UnityEngine;
 
 public class FirebaseViewerWindow : EditorWindow
 {
+    private enum Tab { Viewer, Sessions, Bookmarks, Settings }
+
+    private Tab currentTab;
+
     private FirebaseViewerSettings settings;
     private string idToken;
     private DateTime tokenTime;
@@ -17,7 +21,12 @@ public class FirebaseViewerWindow : EditorWindow
     private string searchKeyword;
     private Vector2 scroll;
 
+    private List<string> bookmarks = new();
+
     private string[] commonPaths = { "players", "zones", "leaderboard", "stats" };
+
+    private string sessionsJsonRaw;
+    private Vector2 sessionsScroll;
 
     [MenuItem("Tools/Firebase Player Data Viewer")]
     public static void ShowWindow()
@@ -41,11 +50,31 @@ public class FirebaseViewerWindow : EditorWindow
 
     private void OnGUI()
     {
-        DrawSettingsUI();
+        DrawTabs(); // <-- BUNU EKLE
         EditorGUILayout.Space(8);
-        DrawFetchUI();
-        EditorGUILayout.Space(8);
-        DrawResultUI();
+
+        switch (currentTab)
+        {
+            case Tab.Viewer:
+                DrawSettingsUI();
+                EditorGUILayout.Space(8);
+                DrawFetchUI();
+                EditorGUILayout.Space(8);
+                DrawResultUI();
+                break;
+
+            case Tab.Sessions:
+                DrawSessionTab();
+                break;
+
+            case Tab.Bookmarks:
+                DrawBookmarksTab();
+                break;
+
+            case Tab.Settings:
+                DrawSettingsUI();
+                break;
+        }
     }
 
     private void DrawSettingsUI()
@@ -167,6 +196,7 @@ public class FirebaseViewerWindow : EditorWindow
             return;
         }
 
+        // Search UI
         EditorGUILayout.BeginHorizontal();
         searchKeyword = EditorGUILayout.TextField("Search", searchKeyword);
         if (GUILayout.Button("Clear", GUILayout.Width(80)))
@@ -175,12 +205,107 @@ public class FirebaseViewerWindow : EditorWindow
             SaveJsonToFile();
         EditorGUILayout.EndHorizontal();
 
-        var display = string.IsNullOrEmpty(searchKeyword)
-            ? JsonPrettyUtil.Pretty(jsonRaw)
-            : JsonPrettyUtil.FilterContains(jsonRaw, searchKeyword);
+        // Scroll ile tree gösterimi
+        scroll = EditorGUILayout.BeginScrollView(scroll);
 
+        try
+        {
+            var dict = MiniJSON.Json.Deserialize(jsonRaw) as Dictionary<string, object>;
+            JsonPrettyUtil.DrawJsonTree(dict); // <-- EKLENECEK
+        }
+        catch
+        {
+            EditorGUILayout.HelpBox("Invalid JSON format", MessageType.Warning);
+        }
+
+        EditorGUILayout.EndScrollView();
+
+        // Alt kýsýmda zone analytics (varsa)
         DrawZoneAnalytics(jsonRaw);
     }
+
+    private async void DrawSessionTab()
+    {
+        EditorGUILayout.LabelField("Player Sessions", EditorStyles.boldLabel);
+
+        if (GUILayout.Button("Load sessions", GUILayout.Height(25)))
+            LoadSessions();
+
+        if (string.IsNullOrEmpty(sessionsJsonRaw))
+        {
+            EditorGUILayout.HelpBox("No session data loaded.", MessageType.Info);
+            return;
+        }
+
+        sessionsScroll = EditorGUILayout.BeginScrollView(sessionsScroll);
+
+        try
+        {
+            var dict = MiniJSON.Json.Deserialize(sessionsJsonRaw) as Dictionary<string, object>;
+
+            if (dict != null)
+            {
+                JsonPrettyUtil.DrawJsonTree(dict);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Invalid JSON structure.", MessageType.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            EditorGUILayout.HelpBox("JSON parse error: " + ex.Message, MessageType.Error);
+        }
+
+        EditorGUILayout.EndScrollView();
+    }
+
+    private void DrawBookmarksTab()
+    {
+        EditorGUILayout.LabelField("Bookmarks", EditorStyles.boldLabel);
+
+        if (GUILayout.Button("Add Current Path"))
+        {
+            if (!bookmarks.Contains(fetchPath))
+                bookmarks.Add(fetchPath);
+        }
+
+        foreach (var bm in bookmarks)
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            if (GUILayout.Button(bm, EditorStyles.miniButton))
+            {
+                fetchPath = bm;
+                _ = FetchAsync();
+            }
+
+            if (GUILayout.Button("X", GUILayout.Width(20)))
+            {
+                bookmarks.Remove(bm);
+                break;
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+    }
+
+    private void DrawTabs()
+    {
+        GUILayout.BeginHorizontal(EditorStyles.toolbar);
+
+        if (GUILayout.Toggle(currentTab == Tab.Viewer, "Viewer", EditorStyles.toolbarButton))
+            currentTab = Tab.Viewer;
+        if (GUILayout.Toggle(currentTab == Tab.Sessions, "Sessions", EditorStyles.toolbarButton))
+            currentTab = Tab.Sessions;
+        if (GUILayout.Toggle(currentTab == Tab.Bookmarks, "Bookmarks", EditorStyles.toolbarButton))
+            currentTab = Tab.Bookmarks;
+        if (GUILayout.Toggle(currentTab == Tab.Settings, "Settings", EditorStyles.toolbarButton))
+            currentTab = Tab.Settings;
+
+        GUILayout.EndHorizontal();
+    }
+
 
     private void DrawZoneAnalytics(string json)
     {
@@ -228,6 +353,26 @@ public class FirebaseViewerWindow : EditorWindow
             EditorGUILayout.EndHorizontal();
         }
     }
+
+    private async void LoadSessions()
+    {
+        try
+        {
+            sessionsJsonRaw = await FirebaseRealtimeDbClient.GetJsonAsync(
+                settings.databaseUrl,
+                idToken,
+                "sessions"
+            );
+
+            Repaint(); // GUI yenile
+        }
+        catch (Exception ex)
+        {
+            sessionsJsonRaw = "// ERROR\n" + ex.Message;
+        }
+    }
+
+
     private void SaveJsonToFile()
     {
         var path = EditorUtility.SaveFilePanel("Save JSON", Application.dataPath, $"firebase_{(string.IsNullOrEmpty(fetchPath) ? "root" : fetchPath.Replace('/', '_'))}.json", "json");
